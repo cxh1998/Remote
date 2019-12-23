@@ -1,0 +1,708 @@
+define REVD
+define ROMCODE
+define PATCH
+INCLUDE "bt_format"
+org 0x0000		// start from patch ram address start
+
+ifdef PATCH
+	bbit1 8,pf_patch_ext
+	beq patch00_0,p_soft_reset
+	beq patch10_5,p_shutdown_radio
+	beq patch16_1,p_lpm_check_wake_lock
+	beq patch1e_5,p_shutter_init
+	branch loop
+pf_patch_ext:
+	beq patch30_2,p_send_lmp
+	beq patch30_5,p_ssp_disable
+	beq patch34_2,p_keyscan_key_process
+	beq patch34_3,p_keyscan_send_key_data
+	beq patch39_5,p_sdp_process
+	branch loop
+
+p_soft_reset:
+	clear_stack
+	call enable_authrom
+	branch soft_reset + 2
+
+p_shutdown_radio:
+	branch p_shutdown_radio0,is_rx
+	hjam 0xd4, 0x955
+	nop 4
+	hjam 0xd2, 0x955
+	nop 4
+	hjam 0xd1, 0x955
+	nop 4	
+	fetch 1,mem_tx_power
+	beq TX_POWER_0DB,p_shutdown_radio_0db
+	beq TX_POWER_3DB,p_shutdown_radio_3db
+	beq TX_POWER_5DB,p_shutdown_radio_5db
+	beq TX_POWER_f3DB,p_shutdown_radio_f3db
+	beq TX_POWER_f5DB,p_shutdown_radio_f5db
+	beq TX_POWER_PAIR,p_shutdown_radio_pair
+p_shutdown_radio_5db:	
+p_shutdown_radio_0db:
+	hjam 0xd0, 0x955
+	hjam 0xe0, 0x956
+p_shutdown_radio0:
+	force 0x08,radio_ctrl
+	branch shutdown_radio0
+	
+p_shutdown_radio_pair:
+p_shutdown_radio_f5db:
+p_shutdown_radio_f3db:
+p_shutdown_radio_3db:
+	hjam 0xd0,0x955
+	hjam 0xc0,0x956
+	branch p_shutdown_radio0
+
+p_lpm_check_ble_tx:
+	arg wake_lock_ble_tx_patch,queue
+	fetch 1,mem_le_tx_buff_used
+	nbranch lpm_get_wake_lock,blank
+	branch lpm_put_wake_lock
+	
+p_lpm_check_wake_lock:
+	call p_lpm_check_ble_tx
+	branch lpm_check_wake_lock + 1
+
+p_shutter_init:
+	call p_key_init
+
+	setarg p_shutter_process_lpm_before
+	store 2,mem_cb_before_lpm
+	
+	setarg p_shutter_le_bb_event_timer
+	store 2,mem_cb_event_timer
+	
+	jam OFF,mem_le_adv_enable
+	branch shutter_init+0x25
+	
+p_shutter_le_bb_event_timer:
+	call p_shutter_process_bb_event
+/**************shutter check sleep timer************/
+	call shutter_check_sleep_timer
+/************************************/
+/**************soft reset power off timer************/
+	call p_shutter_check_power_off_timer
+/************************************/
+	call p_shutter_process_bb_event
+/**************classic shutter timer******************/
+	call classic_shutter_check_unplug_timer
+	call classic_shutter_hid_handshake_timer
+	call classic_shutter_hid_disconn_timer
+/************************************/
+/**************ble shutter timer***********************/
+	branch ble_shutter_reconn_timer
+
+p_shutter_process_lpm_before:
+	call gpio_set_before_lpm_common
+	call p_remote_gpio_set_before_lpm
+	branch shutter_process_lpm_before
+
+p_shutter_check_power_off_timer:
+	arg mem_shutter_power_off_timer,regc
+	arg p_shutter_check_power_off_timeout,regb
+	branch timer_single_step	
+p_shutter_check_power_off_timeout:
+	fetch 2,mem_ui_state_map
+	bbit1 UI_STATE_BLE_CONNECTED,shutter_wait_power_off
+	bbit1 UI_STATE_BT_CONNECTED,shutter_wait_power_off
+	fetch 1,mem_shutter_led_struct_app_led_type
+	// beq UI_LED_STATE_BLINK_START,shutter_wait_power_off
+	// beq UI_LED_STATE_BLINK_LIGHTING,shutter_wait_power_off
+	// beq UI_LED_STATE_BLINK_DARKING,shutter_wait_power_off
+	// jam 0x38,0x8070
+	
+	// --pin3
+	hfetch 4,core_gpio_oe0
+	set1 3,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_oe0
+	hfetch 4,core_gpio_out0
+	set0 3,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_out0
+
+	// --pin4
+	hfetch 4,core_gpio_oe0
+	set1 4,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_oe0
+	hfetch 4,core_gpio_out0
+	set0 4,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_out0
+	
+	// --pin5
+	hfetch 4,core_gpio_oe0
+	set1 5,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_oe0
+	hfetch 4,core_gpio_out0
+	set0 5,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_out0
+
+	// --pin8
+	hfetch 4,core_gpio_oe0
+	set0 8,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_oe0
+	hfetch 4,core_gpio_out0
+	set1 8,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_out0
+	
+	// --pin21
+	hfetch 4,core_gpio_oe0
+	set0 0x15,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_oe0
+	hfetch 4,core_gpio_out0
+	set1 0x15,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_out0
+	
+	// --pin22
+	hfetch 4,core_gpio_oe0
+	set0 0x16,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_oe0
+	hfetch 4,core_gpio_out0
+	set1 0x16,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_out0
+	
+	// --pin26
+	hfetch 4,core_gpio_oe0
+	set0 0x1A,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_oe0
+	hfetch 4,core_gpio_out0
+	set1 0x1A,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_out0
+	
+	// --pin28---LED
+	hfetch 4,core_gpio_oe0
+	set1 0x1C,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_oe0
+	hfetch 4,core_gpio_out0
+	set1 0x1C,pdata	//N ranges from 0 to 31
+	hstore 4,core_gpio_out0
+
+	jam 0xe0,0x807b 
+	branch check_51cmd_hibernate+2
+p_send_lmp:
+	disable user
+	call lmo_fifo_process
+	fetch 1,mem_lmp_to_send
+	rtn blank
+	bbit1 7,p_send_lmp_escape
+	branch send_lmp0
+	
+p_send_lmp_escape:
+	beq LMP_EXT_FEATURES_RES,p_send_lmpext_features_res
+	beq LMP_EXT_FEATURES_REQ,p_send_lmpext_features_req	
+	branch send_lmp_escape
+
+p_send_lmpext_features_res:
+	call p_check_ssp_enable
+	fetch 1,mem_lmp_to_send
+	branch send_lmpext_features_res
+p_send_lmpext_features_req:
+	call p_check_ssp_enable
+	fetch 1,mem_lmp_to_send
+	branch send_lmpext_features_req
+
+p_check_ssp_enable:
+	fetch 1,mem_ssp_enable 
+	branch ssp_disable, blank
+	branch  ssp_enable
+
+p_ssp_disable:
+	fetch 1,mem_features+6
+	set0 param_featrue_ssp,pdata
+	store 1,mem_features+6
+	setarg 0x1
+	store 2,mem_lmpext_ssp_enable
+	rtn
+
+p_keyscan_key_process:
+	call p_shutter_process_bb_event
+	fetch 2,0x4ffe
+	store 2,mem_key_value
+	call p_shutter_process_bb_event
+	// call keyscan_key_process + 9
+	fetch 2,mem_key_value
+	store 2,0x4ffe
+	call p_shutter_process_bb_event
+	rtn
+
+p_keyscan_send_key_data:
+	//branch keyscan_send_key_data + 1
+	rtn
+p_sdp_process:
+	call enable_authrom
+	call sdp_process + 1
+	branch disable_authrom
+	
+p_lightness_reset:
+       arg 0x64,pdata
+       store 1, mem_lightness
+       call p_mem_data_save_lightness_ep
+       rtn
+p_temperature_reset:
+       arg 0x32,pdata
+       store 1, mem_temperature
+       call p_mem_data_save_temperature_ep
+       rtn
+p_key_init:
+	arg 0x03,temp			//output high mode
+	call gpio_config_output
+	arg 0x03,temp			//output high level
+	call gpio_out_inactive
+	arg 0x04,temp
+	call gpio_config_output
+	arg 0x04,temp
+	call gpio_out_inactive
+	arg 0x05,temp
+	call gpio_config_output
+	arg 0x05,temp
+	call gpio_out_inactive
+
+	arg 0x08,temp			//08 input  high mode
+	call gpio_config_input
+	arg 0x15,temp			//21 input  high mode
+	call gpio_config_input
+	arg 0x16,temp			//22 input  high mode
+	call gpio_config_input
+	arg 0x1A,temp			//26 input  high mode
+	call gpio_config_input
+
+	arg 0x1C,temp			//28 output high mode
+	call gpio_config_output
+	arg 0x1c,temp			//28 output high mode
+	call gpio_out_inactive
+	rtn
+	
+p_data_check:
+	arg 0x15,pdata
+	
+	fetcht 1,0x4379	// tid
+	iadd temp,pdata
+	fetcht 1,0x437a	// key
+	iadd temp,pdata
+	fetcht 1,0x437b	// len
+	iadd temp,pdata
+	fetcht 1,0x437c	//data1
+	iadd temp,pdata
+	fetcht 1,0x437d	//data2
+	iadd temp,pdata
+	
+	store 1,0x437e	//check
+	rtn
+
+// pdata: eeprom address 
+// temp: len
+// rega: data ptr
+p_mem_data_save_lightness_ep:
+	setarg 0x1ff0
+	arg 0x01,temp
+	arg mem_lightness,rega
+	call iicd_write_eep
+	rtn
+p_mem_data_save_temperature_ep:
+	setarg 0x1ff1
+	arg 0x01,temp
+	arg mem_temperature,rega
+	call iicd_write_eep
+	rtn
+	
+//  regb: offset, relation   mem_eeprom_base 
+//  temp: len
+//  rega: data ptr
+p_mem_data_read_lightness_ep:
+	arg 0xc0,regb
+	arg 0x01,temp
+	arg mem_lightness,rega
+	call iicd_read_eep_data
+	rtn
+p_mem_data_read_temperature_ep:
+	arg 0xc1,regb
+	arg 0x01,temp
+	arg mem_temperature,rega
+	call iicd_read_eep_data
+	rtn
+	
+p_key_01:    //分组
+	jam 0,mem_key_scan_enable
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+        
+	random pdata
+	store 1,0x4379 	 // tid
+	jam 0x01,0x437a 	 // key
+	jam 0, 0x437b          // len
+	jam 0,0x437c           // data 1
+	jam 0,0x437d           // data 2
+	
+	call p_data_check
+	jam ON,mem_le_adv_enable
+	rtn
+p_key_02:  //三色温转换
+	jam 0,mem_key_scan_enable
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	 // tid
+	jam 0x02,0x437a 	 // key
+	jam 0, 0x437b          // len
+	jam 0,0x437c
+	jam 0,0x437d
+	
+	call p_data_check
+	jam ON,mem_le_adv_enable
+	rtn
+p_temp_01:
+	arg 0,pdata
+	store 1,mem_temperature
+	rtn
+p_temp_02:
+	increase -20,pdata
+	store 1,mem_temperature
+	rtn
+p_key_03:  //色温调低
+	jam 0,mem_key_scan_enable
+	// temperature
+	call p_mem_data_read_temperature_ep
+	fetch 1,mem_temperature
+	beq 0xff,p_temperature_reset
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	 // tid
+	jam 0x03,0x437a 	 // key
+	jam 0x01, 0x437b       // len
+	fetch 1,mem_temperature
+	sub pdata,0x14,null
+	call p_temp_01,positive //<20
+	ncall p_temp_02,positive//>=20
+	store 1,0x437c 	 // temperature
+	jam 0,0x437d
+	
+	call p_data_check
+	jam ON,mem_le_adv_enable
+	call p_mem_data_save_temperature_ep
+	rtn
+p_key_04:
+	jam 0,mem_key_scan_enable
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	 // tid
+	jam 0x04,0x437a 	 // key
+	jam 0, 0x437b         // len
+	jam 0,0x437c
+	jam 0,0x437d
+	
+	call p_data_check
+	jam ON,mem_le_adv_enable
+	rtn
+p_key_05:
+	jam 0,mem_key_scan_enable
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	 // tid
+	jam 0x05,0x437a 	 // key
+	jam 0, 0x437b         // len
+	jam 0,0x437c
+	jam 0,0x437d
+	
+	call p_data_check
+	jam ON,mem_le_adv_enable
+	rtn
+p_light_01:
+	arg 0,pdata
+	store 1,mem_lightness
+	rtn
+p_light_02:
+	increase -20,pdata
+	store 1,mem_lightness
+	rtn	
+p_key_06:
+	jam 0,mem_key_scan_enable
+	// lightness
+	call p_mem_data_read_lightness_ep
+	fetch 1,mem_lightness
+	beq 0xff,p_lightness_reset
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	      // tid
+	jam 0x06,0x437a 	      // key
+	jam 0x01, 0x437b       // len
+	fetch 1,mem_lightness
+	sub pdata,0x14,null
+	call p_light_01,positive //<20
+	ncall p_light_02,positive//>=20
+	store 1,0x437c 	 // lightness
+	jam 0,0x437d
+	
+	call p_data_check
+	
+	jam ON,mem_le_adv_enable
+	call p_mem_data_save_lightness_ep
+	rtn
+p_key_07:
+	jam 0,mem_key_scan_enable
+	// lightness
+	call p_mem_data_read_lightness_ep
+	fetch 1,mem_lightness
+	beq 0xff,p_lightness_reset
+	// temperature
+	call p_mem_data_read_temperature_ep
+	fetch 1,mem_temperature
+	beq 0xff,p_temperature_reset
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	                // tid
+	jam 0x07,0x437a 	                // key
+	jam 0x02, 0x437b                 // len
+	fetch 1,mem_lightness
+	store 1,0x437c	                // lightness
+	fetch 1,mem_temperature   // temperature
+	store 1,0x437d
+	
+	call p_data_check
+	jam ON,mem_le_adv_enable
+	rtn
+p_light_03:
+	increase 0x14,pdata
+	store 1,mem_lightness
+	rtn
+p_light_04:
+	arg 0x64,pdata
+	store 1,mem_lightness
+	rtn
+p_key_08:
+	jam 0,mem_key_scan_enable
+	// lightness
+	call p_mem_data_read_lightness_ep
+	fetch 1,mem_lightness
+	beq 0xff,p_lightness_reset
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	 // tid
+	jam 0x08,0x437a 	 // key
+	jam 0x01, 0x437b       // len
+	fetch 1,mem_lightness
+	sub pdata,0x50,null
+	call p_light_03,positive //<= 80
+	ncall p_light_04,positive//>80
+	store 1,0x437c 	 // lightness
+	jam 0,0x437d
+	
+	call p_data_check
+	
+	jam ON,mem_le_adv_enable
+	call p_mem_data_save_lightness_ep
+	rtn
+p_key_09:
+	jam 0,mem_key_scan_enable
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	 // tid
+	jam 0x09,0x437a 	 // key
+	jam 0, 0x437b          // len
+	jam 0,0x437c
+	jam 0,0x437d
+	
+	call p_data_check
+	jam ON,mem_le_adv_enable
+	rtn
+p_key_10:
+	jam 0,mem_key_scan_enable
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	 // tid
+	jam 0x0a,0x437a 	 // key
+	jam 0x01, 0x437b          // len
+	jam 0x05,0x437c
+	jam 0x05,mem_lightness
+	jam 0,0x437d
+
+	call p_data_check
+	jam ON,mem_le_adv_enable
+	call p_mem_data_save_lightness_ep
+	rtn
+	
+p_temp_03:
+	increase 0x14,pdata
+	store 1,mem_temperature
+	rtn
+p_temp_04:
+	arg 0x64,pdata
+	store 1,mem_temperature
+	rtn
+p_key_11:
+	jam 0,mem_key_scan_enable
+	// temperature
+	call p_mem_data_read_temperature_ep
+	fetch 1,mem_temperature
+	beq 0xff,p_temperature_reset
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	 // tid
+	jam 0x0B,0x437a 	 // key
+	jam 0x01, 0x437b       // len
+	fetch 1,mem_temperature
+	sub pdata,0x50,null
+	call p_temp_03,positive //<= 80
+	ncall p_temp_04,positive//>80
+	store 1,0x437c 	 // temperature
+	jam 0,0x437d
+	
+	call p_data_check
+	
+	jam ON,mem_le_adv_enable
+	call p_mem_data_save_temperature_ep
+	rtn
+p_key_12:
+	jam 0,mem_key_scan_enable
+	arg 0x9c,temp			//pin28 output low level
+	call gpio_out_inactive
+	
+	random pdata
+	store 1,0x4379 	 // tid
+	jam 0x0c,0x437a 	 // key
+	jam 0, 0x437b          // len
+	jam 0,0x437c
+	jam 0,0x437d
+	
+	call p_data_check
+	jam ON,mem_le_adv_enable
+	rtn
+	
+p_delay_ms:
+	//nop 1200000
+	rtn
+p_key_scan_line1:
+	/*------key01_5->08---------*/
+	arg 0x03,temp
+	call gpio_out_inactive
+	arg 0x04,temp
+	call gpio_out_inactive
+	arg 0x85,temp
+	call gpio_out_inactive
+	
+	/*------key01_5->08---------*/
+	arg ,0x88,temp
+	call gpio_get_bit
+	ncall p_key_01,true
+	/*------key02_5->21---------*/
+	arg ,0x95,temp
+	call gpio_get_bit
+	ncall p_key_02,true
+	/*------key03_5->22---------*/
+	arg ,0x96,temp
+	call gpio_get_bit
+	ncall p_key_03,true
+	/*------key04_5->26---------*/
+	arg ,0x9A,temp
+	call gpio_get_bit
+	ncall p_key_04,true
+	rtn
+p_key_scan_line2:
+	/*------key05_4->08---------*/
+	arg 0x03,temp
+	call gpio_out_inactive
+	arg 0x84,temp
+	call gpio_out_inactive
+	arg 0x05,temp
+	call gpio_out_inactive
+	arg ,0x88,temp
+	call gpio_get_bit
+	ncall p_key_05,true
+	/*------key06_4->21---------*/
+	arg ,0x95,temp
+	call gpio_get_bit
+	ncall p_key_06,true
+	/*------key07_4->22---------*/
+	arg ,0x96,temp
+	call gpio_get_bit
+	ncall p_key_07,true
+	/*------key08_4->26---------*/
+	arg ,0x9A,temp
+	call gpio_get_bit
+	ncall p_key_08,true
+	rtn
+p_key_scan_line3:
+	/*------key09_3->08---------*/
+	arg 0x83,temp
+	call gpio_out_inactive
+	arg 0x04,temp
+	call gpio_out_inactive
+	arg 0x05,temp
+	call gpio_out_inactive
+	arg ,0x88,temp
+	call gpio_get_bit
+	ncall p_key_09,true
+	/*------key10_3->21---------*/
+	arg ,0x95,temp
+	call gpio_get_bit
+	ncall p_key_10,true
+	/*------key11_3->22---------*/
+	arg ,0x96,temp
+	call gpio_get_bit
+	ncall p_key_11,true
+	/*------key12_3->26---------*/
+	arg ,0x9A,temp
+	call gpio_get_bit
+	ncall p_key_12,true
+	rtn
+p_shutter_process_bb_event:
+	fetch 1,mem_key_scan_enable
+	rtn blank
+	call p_key_scan_line1
+	call p_key_scan_line2
+	call p_key_scan_line3
+	rtn
+p_remote_gpio_set_before_lpm:
+	arg 0x83,temp			//Low  level output
+	call gpio_config_output
+	arg 0x83,temp
+	call gpio_out_inactive
+	arg 0x84,temp
+	call gpio_config_output
+	arg 0x84,temp
+	call gpio_out_inactive
+	arg 0x85,temp
+	call gpio_config_output
+	arg 0x85,temp
+	call gpio_out_inactive
+
+	arg 0x08,temp			//High level input
+	call gpio_config_input
+	arg 0x15,temp
+	call gpio_config_input
+	arg 0x16,temp
+	call gpio_config_input
+	arg 0x1A,temp
+	call gpio_config_input
+	
+	/*--------测试灯--------*/
+	arg 0x1C,temp			//pin28 output high level
+	call gpio_config_output
+	arg 0x1c,temp
+	call gpio_out_inactive
+	
+	setarg 0x0100
+	store 2,mem_gpio_wakeup_low
+	setarg 0x0460
+	store 2,mem_gpio_wakeup_low + 2
+	
+endif
+
